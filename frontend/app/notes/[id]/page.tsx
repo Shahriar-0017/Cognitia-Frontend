@@ -48,7 +48,9 @@ const generateId = (): string => {
   return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15)
 }
 
-export default function NoteViewerPage({ params }: { params: { id: string } }) {
+import * as React from "react"
+
+export default function NoteViewerPage({ params }: { params: Promise<{ id: string }> }) {
   const router = useRouter()
   const searchParams = useSearchParams()
   const source = searchParams.get("source") || "my-notes" // Default to my-notes if not specified
@@ -80,6 +82,10 @@ export default function NoteViewerPage({ params }: { params: { id: string } }) {
   const [isRootUploadDialogOpen, setIsRootUploadDialogOpen] = useState(false)
   const [uploadedRootFiles, setUploadedRootFiles] = useState<FileList | null>(null)
 
+  // Unwrap params using React.use()
+  const unwrappedParams = React.use(params)
+  const noteId = unwrappedParams.id
+
   // Check if the current user is the author of the note
   const isAuthor = note?.authorId === CURRENT_USER.id
 
@@ -90,40 +96,62 @@ export default function NoteViewerPage({ params }: { params: { id: string } }) {
     }
   }, [])
 
-  // Fetch note data
+  // Fetch note data from backend
   useEffect(() => {
-    const fetchedNote = getNoteById(params.id)
-    if (fetchedNote) {
-      setNote(fetchedNote)
-      setViewCount(fetchedNote.viewCount || 0)
-      setOriginalFiles(JSON.parse(JSON.stringify(fetchedNote.files || []))) // Deep clone
-      setVisibility(fetchedNote.visibility === "public" ? "public" : "private")
-      setOriginalVisibility(fetchedNote.visibility === "public" ? "public" : "private")
-
-      // Increment view count
-      incrementNoteViewCount(params.id)
-
-      // Set the first file as selected by default
-      if (fetchedNote.files && fetchedNote.files.length > 0) {
-        // Find the first file (not directory) to display
-        const findFirstFile = (files: NoteFile[]): NoteFile | null => {
-          for (const file of files) {
-            if (file.type === "file") return file
-            if (file.type === "directory" && file.children) {
-              const found = findFirstFile(file.children)
-              if (found) return found
-            }
+    if (!noteId) return;
+    setNote(null); // reset while loading
+    const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+    fetch(`http://localhost:3001/api/notes/${noteId}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+      .then(async res => {
+        if (res.status === 404) {
+          // Note not found
+          setNote(null);
+          toast({
+            title: "Note not found",
+            description: "The note you are looking for does not exist or you do not have access.",
+            variant: "destructive",
+          });
+          return null;
+        }
+        if (!res.ok) {
+          // Other error
+          setNote(null);
+          toast({
+            title: "Error loading note",
+            description: `Failed to load note (status ${res.status})`,
+            variant: "destructive",
+          });
+          return null;
+        }
+        return res.json();
+      })
+      .then(data => {
+        if (data && data.note) {
+          setNote(data.note);
+          setViewCount(data.note.viewCount || 0);
+          setOriginalFiles(JSON.parse(JSON.stringify(data.note.files || [])));
+          setVisibility(data.note.visibility === "PUBLIC" ? "public" : "private");
+          setOriginalVisibility(data.note.visibility === "PUBLIC" ? "public" : "private");
+          // Set the first file as selected by default
+          if (data.note.files && data.note.files.length > 0) {
+            const findFirstFile = (files: NoteFile[]): NoteFile | null => {
+              for (const file of files) {
+                if (file.type === "file") return file;
+                if (file.type === "directory" && file.children) {
+                  const found = findFirstFile(file.children);
+                  if (found) return found;
+                }
+              }
+              return null;
+            };
+            const firstFile = findFirstFile(data.note.files);
+            if (firstFile) setSelectedFile(firstFile);
           }
-          return null
         }
-
-        const firstFile = findFirstFile(fetchedNote.files)
-        if (firstFile) {
-          setSelectedFile(firstFile)
-        }
-      }
-    }
-  }, [params.id])
+      });
+  }, [noteId]);
 
   // Handle visibility change
   const handleVisibilityChange = useCallback(
@@ -147,9 +175,9 @@ export default function NoteViewerPage({ params }: { params: { id: string } }) {
     (rating: number) => {
       if (!isMounted.current) return
       setUserRating(rating)
-      updateNoteRating(params.id, rating)
+      updateNoteRating(noteId, rating)
     },
-    [params.id],
+    [noteId],
   )
 
   // Handle like/dislike
@@ -298,13 +326,14 @@ export default function NoteViewerPage({ params }: { params: { id: string } }) {
           return files.map((file) => {
             if (file.id === parentId) {
               // Create new folder
-              const newFolder: NoteFile = {
-                id: generateId(),
-                name: folderName,
-                type: "directory",
-                children: [],
-                updatedAt: new Date(),
-              }
+            const newFolder: NoteFile = {
+              id: generateId(),
+              name: folderName,
+              type: "directory" as const,
+              children: [],
+              updatedAt: new Date(),
+              size: 0,
+            }
 
               // Add to children if it's a directory
               if (file.type === "directory") {
@@ -355,9 +384,10 @@ export default function NoteViewerPage({ params }: { params: { id: string } }) {
       const newFolder: NoteFile = {
         id: generateId(),
         name: newRootFolderName.trim(),
-        type: "directory",
+        type: "directory" as const,
         children: [],
         updatedAt: new Date(),
+        size: 0,
       }
 
       const updatedFiles = [...JSON.parse(JSON.stringify(note.files)), newFolder]
@@ -389,7 +419,7 @@ export default function NoteViewerPage({ params }: { params: { id: string } }) {
       const newFiles: NoteFile[] = Array.from(uploadedRootFiles).map((file) => ({
         id: generateId(),
         name: file.name,
-        type: "file",
+        type: "file" as const,
         content: "# Uploaded File\n\nThis file was just uploaded and its content will be processed.",
         updatedAt: new Date(),
         size: file.size,
@@ -428,7 +458,7 @@ export default function NoteViewerPage({ params }: { params: { id: string } }) {
         const newFiles: NoteFile[] = Array.from(fileList).map((file) => ({
           id: generateId(),
           name: file.name,
-          type: "file",
+          type: "file" as const,
           content: "# Uploaded File\n\nThis file was just uploaded and its content will be processed.",
           updatedAt: new Date(),
           size: file.size,
@@ -595,8 +625,8 @@ export default function NoteViewerPage({ params }: { params: { id: string } }) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <div className="text-center">
-          <h2 className="text-xl font-semibold">Loading note...</h2>
-          <p className="text-slate-500">Please wait while we fetch the note data.</p>
+          <h2 className="text-xl font-semibold">Note not found</h2>
+          <p className="text-slate-500">The note you are looking for does not exist or you do not have access.</p>
         </div>
       </div>
     )

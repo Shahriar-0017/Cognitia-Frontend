@@ -10,21 +10,22 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Badge } from "@/components/ui/badge"
-import { NOTES_GROUPS } from "@/lib/mock-data"
 
-interface NewNoteModalProps {
-  isOpen: boolean
-  onClose: () => void
+
+type NewNoteModalProps = {
+  isOpen: boolean;
+  onClose: () => void;
   onSubmit: (noteData: {
-    title: string
-    notesGroupId: string
-    visibility: "public" | "private"
-    tags: string[]
-    files: File[]
-  }) => void
-}
+    title: string;
+    notesGroupId: string;
+    visibility: "public" | "private";
+    tags: string[];
+    files: File[];
+  }) => void;
+  notesGroups: Array<{ id: string; name: string }>;
+};
 
-export function NewNoteModal({ isOpen, onClose, onSubmit }: NewNoteModalProps) {
+export function NewNoteModal({ isOpen, onClose, onSubmit, notesGroups }: NewNoteModalProps) {
   const [title, setTitle] = useState("")
   const [groupId, setGroupId] = useState("")
   const [isPublic, setIsPublic] = useState(false)
@@ -140,7 +141,7 @@ export function NewNoteModal({ isOpen, onClose, onSubmit }: NewNoteModalProps) {
                   <SelectValue placeholder="Select a group" />
                 </SelectTrigger>
                 <SelectContent>
-                  {NOTES_GROUPS.map((group) => (
+                  {notesGroups.map((group) => (
                     <SelectItem key={group.id} value={group.id}>
                       {group.name}
                     </SelectItem>

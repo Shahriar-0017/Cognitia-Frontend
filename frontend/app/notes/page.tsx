@@ -53,29 +53,56 @@ export default function NotesPage() {
   useEffect(() => {
     setLoading(true)
     const token = localStorage.getItem("token")
-    Promise.all([
-      fetch("http://localhost:3001/api/notes?visibility=all", {
-        headers: { Authorization: `Bearer ${token}` },
-      }).then(res => res.json()),
-      fetch("http://localhost:3001/api/notes?visibility=public", {
-        headers: { Authorization: `Bearer ${token}` },
-      }).then(res => res.json()),
-      fetch("http://localhost:3001/api/notes/groups", {
-        headers: { Authorization: `Bearer ${token}` },
-      }).then(res => res.json()).catch(() => ({ groups: [] })),
-    ])
-      .then(([myNotesData, globalNotesData, groupsData]) => {
+    if (!token) {
+      setError("Authentication required")
+      setLoading(false)
+      return
+    }
+
+    const fetchData = async () => {
+      try {
+        // Fetch only current user's notes for "My Notes"
+        const myNotesRes = await fetch("http://localhost:3001/api/notes/my", {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        if (!myNotesRes.ok) throw new Error("Failed to fetch my notes")
+        const myNotesData = await myNotesRes.json()
+
+        // Fetch all notes for "Global Notes"
+        const globalNotesRes = await fetch("http://localhost:3001/api/notes", {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        if (!globalNotesRes.ok) throw new Error("Failed to fetch global notes")
+        const globalNotesData = await globalNotesRes.json()
+
+        // Fetch groups for current user
+        const groupsRes = await fetch("http://localhost:3001/api/notes/groups", {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        let groupsData = { groups: [] }
+        if (groupsRes.ok) {
+          groupsData = await groupsRes.json()
+        } else {
+          console.error("Groups fetch error:", await groupsRes.text())
+        }
+
+        // Set state
         setMyNotes(myNotesData.notes || [])
         setGlobalNotes(globalNotesData.notes || [])
         setNotesGroups(groupsData.groups || [])
-        // Recently viewed: sort by updatedAt desc, take 12
-        const combinedNotes = [
-          ...(myNotesData.notes || []),
-          ...(globalNotesData.notes || []),
-        ]
+
+        // Recently viewed: sort by updatedAt desc, take 12 (from my notes only), remove duplicates by id
+        const seen = new Set()
+        const combinedNotes = (myNotesData.notes || [])
           .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+          .filter(note => {
+            if (seen.has(note.id)) return false;
+            seen.add(note.id);
+            return true;
+          })
           .slice(0, 12)
         setRecentlyViewedNotes(combinedNotes)
+
         // Extract tags
         const tags = new Set<string>()
         combinedNotes.forEach(note => {
@@ -84,14 +111,18 @@ export default function NotesPage() {
           }
         })
         setMyTags(Array.from(tags))
+      } catch (error) {
+        console.error("Fetch error:", error)
+        setError(error.message || "Failed to load data")
+      } finally {
         setLoading(false)
-      })
-      .catch(() => {
-        setError("Failed to load notes")
-        setLoading(false)
-      })
+      }
+    }
+
+    fetchData()
   }, [])
 
+  // Rest of your component code remains the same...
   // Filter and sort my notes
   const filteredMyNotes = useMemo(() => {
     let result = [...myNotes]
@@ -168,8 +199,64 @@ export default function NotesPage() {
 
   // Handle creating a new group
   const handleCreateGroup = (groupData: { name: string; description: string }) => {
-    // In a real app, POST to backend
-    alert(`Group "${groupData.name}" created successfully!`)
+    setLoading(true)
+    setError(null)
+    const token = localStorage.getItem("token")
+    fetch("http://localhost:3001/api/notes/groups", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        name: groupData.name,
+        description: groupData.description,
+      }),
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          const err = await res.json()
+          throw new Error(err.error || "Failed to create group")
+        }
+        setIsNewGroupModalOpen(false)
+        // Refetch groups and notes
+        return Promise.all([
+          fetch("http://localhost:3001/api/notes?mine=true", {
+            headers: { Authorization: `Bearer ${token}` },
+          }).then(res => res.json()),
+          fetch("http://localhost:3001/api/notes", {
+            headers: { Authorization: `Bearer ${token}` },
+          }).then(res => res.json()),
+          fetch("http://localhost:3001/api/notes/groups", {
+            headers: { Authorization: `Bearer ${token}` },
+          }).then(res => res.json()).catch(() => ({ groups: [] })),
+        ])
+      })
+      .then(([myNotesData, globalNotesData, groupsData]) => {
+        setMyNotes(myNotesData.notes || [])
+        setGlobalNotes(globalNotesData.notes || [])
+        setNotesGroups(groupsData.groups || [])
+        // Recently viewed: sort by updatedAt desc, take 12 (from my notes only)
+        const combinedNotes = [
+          ...(myNotesData.notes || [])
+        ]
+          .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+          .slice(0, 12)
+        setRecentlyViewedNotes(combinedNotes)
+        // Extract tags
+        const tags = new Set<string>()
+        combinedNotes.forEach(note => {
+          if (note.tags && Array.isArray(note.tags)) {
+            note.tags.forEach((tag: string) => tags.add(tag))
+          }
+        })
+        setMyTags(Array.from(tags))
+        setLoading(false)
+      })
+      .catch((err) => {
+        setError(err.message || "Failed to create group")
+        setLoading(false)
+      })
   }
 
   // Handle creating a new note
@@ -208,12 +295,12 @@ export default function NotesPage() {
         throw new Error(err.error || "Failed to create note")
       }
       setIsNewNoteModalOpen(false)
-      // Refetch notes
+      // Refetch notes for current user and all notes
       Promise.all([
-        fetch("http://localhost:3001/api/notes?visibility=all", {
+        fetch("http://localhost:3001/api/notes?mine=true", {
           headers: { Authorization: `Bearer ${token}` },
         }).then(res => res.json()),
-        fetch("http://localhost:3001/api/notes?visibility=public", {
+        fetch("http://localhost:3001/api/notes", {
           headers: { Authorization: `Bearer ${token}` },
         }).then(res => res.json()),
         fetch("http://localhost:3001/api/notes/groups", {
@@ -224,10 +311,9 @@ export default function NotesPage() {
           setMyNotes(myNotesData.notes || [])
           setGlobalNotes(globalNotesData.notes || [])
           setNotesGroups(groupsData.groups || [])
-          // Recently viewed: sort by updatedAt desc, take 12
+          // Recently viewed: sort by updatedAt desc, take 12 (from my notes only)
           const combinedNotes = [
-            ...(myNotesData.notes || []),
-            ...(globalNotesData.notes || []),
+            ...(myNotesData.notes || [])
           ]
             .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
             .slice(0, 12)
@@ -531,6 +617,7 @@ export default function NotesPage() {
           isOpen={isNewNoteModalOpen}
           onClose={() => setIsNewNoteModalOpen(false)}
           onSubmit={handleCreateNote}
+          notesGroups={notesGroups.map(g => ({ id: g.id, name: g.name }))}
         />
       </div>
     </>

@@ -8,7 +8,6 @@ import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/componen
 import { Progress } from "@/components/ui/progress"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Label } from "@/components/ui/label"
-import { getModelTestById, startTest, submitAnswer, finishTest } from "@/lib/model-test-data"
 import { AlertCircle, ArrowLeft, ArrowRight, CheckCircle, Clock, Flag } from "lucide-react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
@@ -25,12 +24,12 @@ export default function TakeTestPage() {
   const router = useRouter()
   const testId = params.id as string
 
-  const [test, setTest] = useState(() => getModelTestById(testId))
+  const [test, setTest] = useState<any>(null)
+  const [questions, setQuestions] = useState<any[]>([])
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0)
   const [answers, setAnswers] = useState<Record<string, number>>({})
   const [flaggedQuestions, setFlaggedQuestions] = useState<Set<number>>(new Set())
   const [timeRemaining, setTimeRemaining] = useState(0)
-  const [attemptId, setAttemptId] = useState<string | null>(null)
   const [showSubmitDialog, setShowSubmitDialog] = useState(false)
   const [showTimeUpDialog, setShowTimeUpDialog] = useState(false)
 
@@ -41,20 +40,42 @@ export default function TakeTestPage() {
     return `${minutes.toString().padStart(2, "0")}:${remainingSeconds.toString().padStart(2, "0")}`
   }
 
+  // Fetch test info and questions from backend
   useEffect(() => {
-    if (!test) {
-      router.push("/model-test")
-      return
+    async function fetchTestAndQuestions() {
+      try {
+        const token = localStorage.getItem("token")
+        // Fetch test info
+        const testRes = await fetch(`http://localhost:3001/api/model-test/${testId}`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        })
+        const testData = await testRes.json()
+        setTest(testData.modelTest)
+
+        // Fetch questions
+        const questionsRes = await fetch(`http://localhost:3001/api/model-test/${testId}/questions`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        })
+        const questionsData = await questionsRes.json()
+        setQuestions(questionsData.questions)
+
+        // Set timer
+        setTimeRemaining((testData.modelTest?.timeLimit || 60) * 60)
+      } catch (error) {
+        router.push("/model-test")
+      }
     }
+    fetchTestAndQuestions()
+    // eslint-disable-next-line
+  }, [testId])
 
-    // Start the test
-    const attempt = startTest(testId, "user123") // Replace with actual user ID
-    setAttemptId(attempt.id)
-
-    // Set initial time
-    setTimeRemaining(test.timeLimit * 60)
-
-    // Start the timer
+  // Timer logic
+  useEffect(() => {
+    if (!test) return
     const timer = setInterval(() => {
       setTimeRemaining((prev) => {
         if (prev <= 1) {
@@ -65,26 +86,28 @@ export default function TakeTestPage() {
         return prev - 1
       })
     }, 1000)
-
     return () => clearInterval(timer)
-  }, [test, testId, router])
+  }, [test])
 
-  if (!test) {
-    return null
+  if (!test || questions.length === 0) {
+    return <div>Loading...</div>
   }
 
-  const currentQuestion = test.questions[currentQuestionIndex]
-  const totalQuestions = test.questions.length
+  const currentQuestion = questions[currentQuestionIndex]
+  const totalQuestions = questions.length
   const answeredCount = Object.keys(answers).length
+
+  // Ensure options is always an array
+  const currentOptions = Array.isArray(currentQuestion.options)
+    ? currentQuestion.options
+    : typeof currentQuestion.options === "string"
+      ? (() => { try { return JSON.parse(currentQuestion.options) } catch { return [] } })()
+      : [];
 
   const handleAnswer = (value: string) => {
     const newAnswers = { ...answers, [currentQuestion.id]: Number.parseInt(value) }
     setAnswers(newAnswers)
-
-    // Submit the answer to the server
-    if (attemptId) {
-      submitAnswer(attemptId, currentQuestion.id, Number.parseInt(value))
-    }
+    // Optionally: send answer to backend here
   }
 
   const handleFlagQuestion = () => {
@@ -113,18 +136,35 @@ export default function TakeTestPage() {
     setCurrentQuestionIndex(index)
   }
 
-  const handleSubmitTest = () => {
-    if (attemptId) {
-      const result = finishTest(attemptId)
-      router.push(`/model-test/results/${result.id}`)
+  const handleSubmitTest = async () => {
+    try {
+      const token = localStorage.getItem("token");
+      const res = await fetch("http://localhost:3001/api/model-test/attempt", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          testId,
+          answers,
+          timeSpent: (test?.timeLimit || 60) * 60 - timeRemaining, // or your own logic
+        }),
+      });
+      if (!res.ok) {
+        // Optionally show an error message
+        return;
+      }
+      const data = await res.json();
+      router.push(`/model-test/results/${data.attemptId}`);
+    } catch (error) {
+      // Optionally show an error message
     }
-  }
+  };
 
   const handleTimeUp = () => {
-    if (attemptId) {
-      const result = finishTest(attemptId)
-      router.push(`/model-test/results/${result.id}`)
-    }
+    // Optionally: send all answers to backend here
+    router.push(`/model-test/results/${testId}`)
   }
 
   return (
@@ -178,7 +218,7 @@ export default function TakeTestPage() {
                     onValueChange={handleAnswer}
                     className="space-y-3"
                   >
-                    {currentQuestion.options.map((option, index) => (
+                    {currentOptions.map((option, index) => (
                       <div key={index} className="flex items-center space-x-2">
                         <RadioGroupItem value={index.toString()} id={`option-${index}`} />
                         <Label htmlFor={`option-${index}`} className="cursor-pointer">
@@ -219,13 +259,13 @@ export default function TakeTestPage() {
                 </div>
 
                 <div className="grid grid-cols-5 gap-2">
-                  {test.questions.map((_, index) => (
+                  {questions.map((_, index) => (
                     <Button
                       key={index}
                       variant="outline"
                       size="sm"
                       className={`p-0 h-8 w-8 ${index === currentQuestionIndex ? "ring-2 ring-primary" : ""} ${
-                        answers[test.questions[index].id] !== undefined ? "bg-emerald-100" : ""
+                        answers[questions[index].id] !== undefined ? "bg-emerald-100" : ""
                       } ${flaggedQuestions.has(index) ? "border-red-500" : ""}`}
                       onClick={() => handleJumpToQuestion(index)}
                     >

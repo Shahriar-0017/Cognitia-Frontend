@@ -8,7 +8,6 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Progress } from "@/components/ui/progress"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
-import { getTestResults } from "@/lib/model-test-data"
 import { CheckCircle, FileText, Home, List, XCircle } from "lucide-react"
 import { Separator } from "@/components/ui/separator"
 
@@ -17,24 +16,49 @@ export default function TestResultsPage() {
   const router = useRouter()
   const attemptId = params.id as string
 
-  const [results, setResults] = useState<ReturnType<typeof getTestResults> | null>(null)
+  const [results, setResults] = useState<any>(null)
   const [activeTab, setActiveTab] = useState("summary")
 
   useEffect(() => {
-    try {
-      const testResults = getTestResults(attemptId)
-      setResults(testResults)
-    } catch (error) {
-      console.error("Error fetching test results:", error)
-      router.push("/model-test")
+    async function fetchResults() {
+      try {
+        const token = localStorage.getItem("token")
+        const res = await fetch(`http://localhost:3001/api/model-test/attempt/${attemptId}`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        })
+        if (!res.ok) throw new Error("Attempt not found")
+        const data = await res.json()
+        // You may need to transform the backend data to match the expected frontend structure
+        setResults(data)
+      } catch (error) {
+        console.error("Error fetching test results:", error)
+        router.push("/model-test")
+      }
     }
+    fetchResults()
   }, [attemptId, router])
 
   if (!results) {
     return null
   }
 
-  const { attempt, test, questionResults, isPassed } = results
+  // Extract and transform data for rendering
+  const { attempt } = results
+  const test = attempt.test
+  const userAnswers = attempt.answers ? JSON.parse(attempt.answers) : {}
+  const questions = test.questions || []
+  const questionResults = questions.map((q: any, idx: number) => {
+    const userAnswer = userAnswers[q.id]
+    const isCorrect = userAnswer !== undefined && userAnswer === q.correctAnswer
+    return {
+      question: q,
+      userAnswer,
+      isCorrect,
+    }
+  })
+  const isPassed = attempt.score >= test.passingScore
 
   // Calculate statistics
   const correctCount = questionResults.filter((r) => r.isCorrect).length
@@ -115,7 +139,7 @@ export default function TestResultsPage() {
                   <div className="space-y-3">
                     <div className="flex justify-between">
                       <span>Date Taken:</span>
-                      <span>{attempt.startTime.toLocaleDateString()}</span>
+                      <span>{attempt.startTime ? new Date(attempt.startTime).toLocaleDateString() : "N/A"}</span>
                     </div>
                     <div className="flex justify-between">
                       <span>Time Spent:</span>
@@ -123,7 +147,7 @@ export default function TestResultsPage() {
                     </div>
                     <div className="flex justify-between">
                       <span>Questions:</span>
-                      <span>{test.questions.length}</span>
+                      <span>{Array.isArray(test.questions) ? test.questions.length : 0}</span>
                     </div>
                     <div className="flex justify-between">
                       <span>Correct:</span>
